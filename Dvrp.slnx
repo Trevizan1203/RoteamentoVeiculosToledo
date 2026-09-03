@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Dvrp.Api/Dvrp.Api.csproj" />
+    <Project Path="src/Dvrp.Application/Dvrp.Application.csproj" />
+    <Project Path="src/Dvrp.Domain/Dvrp.Domain.csproj" />
+    <Project Path="src/Dvrp.Infrastructure/Dvrp.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dvrp.Playground/Dvrp.Playground.csproj" />
+  </Folder>
+</Solution>
