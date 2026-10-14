@@ -52,10 +52,18 @@ public sealed class SplitService
     /// <summary>
     /// Particiona o giant tour entre os veículos, NA ORDEM da lista, minimizando J(S).
     ///
-    /// cost[k][i] = menor custo para atender os 'i' primeiros clientes do tour usando os 'k'
-    /// primeiros veículos; o veículo k sai da SUA origem, atende um segmento contíguo
-    /// (possivelmente vazio) e volta ao depósito. A última camada recebe as rotas extras: clientes que sobram depois do último
-    /// veículo seguem em rotas virtuais a partir do depósito, cada uma pagando a penalidade.
+    /// Frota só de veículos idênticos no depósito (capacidade Q): a dimensão de veículo é
+    /// redundante, e vale o Split clássico de Prins, O(n·L), com a penalidade por rota excedente
+    /// aplicada DEPOIS da partição — exatamente o comportamento original. Com origens ou
+    /// capacidades diferentes, vale a DP por veículo, com a penalidade DENTRO da DP. As duas
+    /// formas só divergem quando a partição passa de m rotas, o que fica registrado em
+    /// <see cref="SplitResult.ExtraRouteCount"/>.
+    ///
+    /// DP por veículo: cost[k][i] = menor custo para atender os 'i' primeiros clientes do tour
+    /// usando os 'k' primeiros veículos; o veículo k sai da SUA origem, atende um segmento
+    /// contíguo (possivelmente vazio) e volta ao depósito. A última camada recebe as rotas extras:
+    /// clientes que sobram depois do último veículo seguem em rotas virtuais a partir do
+    /// depósito, cada uma pagando a penalidade.
     ///
     /// Desempate (o mesmo do Split clássico): os inícios de segmento são varridos em ordem
     /// crescente e só uma melhora ESTRITA substitui o candidato, então vence o menor início.
@@ -66,6 +74,54 @@ public sealed class SplitService
         CostMatrix matrix,
         IReadOnlyList<SplitVehicle> vehicles,
         float extraRouteCapacity)
+    {
+        List<Segment> segments = IsUniformDepotFleet(vehicles, extraRouteCapacity)
+            ? SplitWithoutFleetLimit(giantTour, matrix, vehicles.Count, extraRouteCapacity)
+            : SplitByVehicle(giantTour, matrix, vehicles, extraRouteCapacity);
+
+        return BuildResult(giantTour, matrix, vehicles, segments, extraRouteCapacity);
+    }
+
+    /// <summary>Segmento [Start .. End-1] do tour; VehicleSlot é a posição na lista, ou -1 para rota extra.</summary>
+    private readonly record struct Segment(int VehicleSlot, int Start, int End);
+
+    private static bool IsUniformDepotFleet(IReadOnlyList<SplitVehicle> vehicles, float capacity) =>
+        vehicles.All(vehicle => vehicle.OriginIndex == DepotIndex && vehicle.Capacity == capacity);
+
+    /// <summary>
+    /// Split clássico: melhor partição sem limite de frota. As primeiras rotas do tour ficam com
+    /// os veículos, na ordem da lista; as que passam do tamanho da frota viram rotas extras.
+    /// </summary>
+    private static List<Segment> SplitWithoutFleetLimit(
+        IReadOnlyList<int> giantTour, CostMatrix matrix, int vehicleCount, float capacity)
+    {
+        int n = giantTour.Count;
+        float[] best = new float[n + 1];
+        int[] start = new int[n + 1];
+        Array.Fill(best, float.PositiveInfinity);
+        best[0] = 0f;
+
+        RelaxSegments(giantTour, matrix, best, best, start, DepotIndex, capacity, fixedCost: 0f, allowEmpty: false);
+
+        int routeCount = 0;
+        for (int end = n; end > 0; end = start[end])
+        {
+            routeCount++;
+        }
+
+        // Reconstrução de trás para frente: começa pela última rota do tour.
+        var segments = new List<Segment>(routeCount);
+        int position = routeCount - 1;
+        for (int end = n; end > 0; end = start[end], position--)
+        {
+            segments.Add(new Segment(position < vehicleCount ? position : -1, start[end], end));
+        }
+
+        return segments;
+    }
+
+    private static List<Segment> SplitByVehicle(
+        IReadOnlyList<int> giantTour, CostMatrix matrix, IReadOnlyList<SplitVehicle> vehicles, float extraRouteCapacity)
     {
         int n = giantTour.Count;
         int vehicleCount = vehicles.Count;
@@ -102,7 +158,31 @@ public sealed class SplitService
         RelaxSegments(giantTour, matrix, cost[extraLayer], cost[extraLayer], start[extraLayer],
             DepotIndex, extraRouteCapacity, fixedCost: ExtraVehiclePenalty, allowEmpty: false);
 
-        return BuildResult(giantTour, matrix, vehicles, start, extraRouteCapacity);
+        // 3. Reconstrução de trás para frente: rotas extras, depois veículo K, K-1, ..., 1.
+        var segments = new List<Segment>();
+        int end = n;
+        int[] extraStart = start[extraLayer];
+
+        while (extraStart[end] != end)
+        {
+            segments.Add(new Segment(VehicleSlot: -1, extraStart[end], end));
+            end = extraStart[end];
+        }
+
+        for (int k = vehicleCount; k >= 1; k--)
+        {
+            int segmentStart = start[k][end];
+
+            // Segmento vazio fora do depósito ainda é uma rota: a volta da origem ao depósito.
+            if (segmentStart < end || vehicles[k - 1].OriginIndex != DepotIndex)
+            {
+                segments.Add(new Segment(k - 1, segmentStart, end));
+            }
+
+            end = segmentStart;
+        }
+
+        return segments;
     }
 
     /// <summary>
@@ -165,50 +245,40 @@ public sealed class SplitService
     }
 
     /// <summary>
-    /// Reconstrói as rotas de trás para frente (rotas extras, depois veículo k, k-1, ..., 1) e
-    /// soma os totais na mesma ordem.
+    /// Monta as rotas a partir dos segmentos (na ordem de trás para frente da reconstrução) e
+    /// soma os totais nessa mesma ordem.
     /// </summary>
     private static SplitResult BuildResult(
         IReadOnlyList<int> tour,
         CostMatrix matrix,
         IReadOnlyList<SplitVehicle> vehicles,
-        int[][] start,
+        List<Segment> segments,
         float extraRouteCapacity)
     {
-        var routes = new List<VehicleRoute>();
+        var routes = new List<VehicleRoute>(segments.Count);
         float totalTtv = 0f;
         float totalDtp = 0f;
-        int end = tour.Count;
+        int extraRouteCount = 0;
 
-        void AddRoute(int vehicleId, int origin, int from, int to, float capacity, bool isVirtual)
+        foreach (Segment segment in segments)
         {
-            VehicleRoute route = BuildRoute(tour, from, to, matrix, vehicleId, origin, capacity, isVirtual);
+            VehicleRoute route;
+            if (segment.VehicleSlot < 0)
+            {
+                extraRouteCount++;
+                route = BuildRoute(tour, segment.Start, segment.End, matrix,
+                    vehicleId: -extraRouteCount, DepotIndex, extraRouteCapacity, isVirtual: true);
+            }
+            else
+            {
+                SplitVehicle vehicle = vehicles[segment.VehicleSlot];
+                route = BuildRoute(tour, segment.Start, segment.End, matrix,
+                    vehicle.VehicleId, vehicle.OriginIndex, vehicle.Capacity, isVirtual: false);
+            }
+
             routes.Add(route);
             totalTtv += route.TravelTimeSeconds;
             totalDtp += route.DistanceMeters;
-        }
-
-        int[] extraStart = start[vehicles.Count + 1];
-        int extraRouteCount = 0;
-        while (extraStart[end] != end)
-        {
-            extraRouteCount++;
-            AddRoute(vehicleId: -extraRouteCount, DepotIndex, extraStart[end], end, extraRouteCapacity, isVirtual: true);
-            end = extraStart[end];
-        }
-
-        for (int k = vehicles.Count; k >= 1; k--)
-        {
-            SplitVehicle vehicle = vehicles[k - 1];
-            int segmentStart = start[k][end];
-
-            // Segmento vazio fora do depósito ainda é uma rota: a volta da origem ao depósito.
-            if (segmentStart < end || vehicle.OriginIndex != DepotIndex)
-            {
-                AddRoute(vehicle.VehicleId, vehicle.OriginIndex, segmentStart, end, vehicle.Capacity, isVirtual: false);
-            }
-
-            end = segmentStart;
         }
 
         routes.Reverse();
