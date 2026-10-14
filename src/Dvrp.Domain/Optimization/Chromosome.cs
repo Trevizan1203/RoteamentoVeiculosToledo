@@ -8,6 +8,7 @@ public sealed class Chromosome
     public float TotalDistanceMeters { get; set; }              // DTP
     public bool IsFeasible { get; set; }
     public IReadOnlyList<VehicleRoute> Routes { get; set; } = Array.Empty<VehicleRoute>();
+    public int ExtraRouteCount => Routes.Count(route => route.IsVirtual);
 
     public Chromosome(int[] genes)
     {

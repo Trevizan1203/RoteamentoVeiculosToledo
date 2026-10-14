@@ -9,13 +9,17 @@ public sealed class VehicleRoute
     public float TotalDemand { get; }
     public bool IsCapacityExceeded { get; }
 
+    /// <summary>Rota extra além da frota disponível, saindo do depósito e paga com penalidade.</summary>
+    public bool IsVirtual { get; }
+
     public VehicleRoute(
         int vehicleIndex,
         IReadOnlyList<int> clientIndices,
         float travelTimeSeconds,
         float distanceMeters,
         float totalDemand,
-        float maxCapacity)
+        float maxCapacity,
+        bool isVirtual = false)
     {
         VehicleIndex = vehicleIndex;
         ClientIndices = clientIndices;
@@ -23,5 +27,6 @@ public sealed class VehicleRoute
         DistanceMeters = distanceMeters;
         TotalDemand = totalDemand;
         IsCapacityExceeded = totalDemand > maxCapacity;
+        IsVirtual = isVirtual;
     }
 }
