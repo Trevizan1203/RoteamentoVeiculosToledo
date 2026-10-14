@@ -223,6 +223,7 @@ public sealed class RouteTimeline
         if (t >= TotalTimeSeconds)
         {
             return new EventAnchor(
+                VehicleIndex: VehicleIndex,
                 AnchorNodeIndex: DepotNodeIndex,
                 AnchorTimeSeconds: TotalTimeSeconds,
                 WaitSeconds: 0.0,
@@ -245,6 +246,7 @@ public sealed class RouteTimeline
         int servedCount = CountStopsArrivedBy(anchorTime);
 
         return new EventAnchor(
+            VehicleIndex: VehicleIndex,
             AnchorNodeIndex: anchorNode,
             AnchorTimeSeconds: anchorTime,
             WaitSeconds: anchorTime - t,

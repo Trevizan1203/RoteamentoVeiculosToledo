@@ -1,4 +1,4 @@
-﻿using Dvrp.Domain.Common;
+using Dvrp.Domain.Common;
 using Dvrp.Domain.Graph;
 using Dvrp.Domain.Pathfinding;
 
@@ -6,6 +6,10 @@ namespace Dvrp.Domain.Logistics;
 
 public sealed class CostMatrixService
 {
+    /// <summary>
+    /// Matriz completa do problema original: associa cada ponto ao nó viário mais próximo e
+    /// calcula todos os pares entre depósito e clientes.
+    /// </summary>
     public CostMatrix BuildMatrix(
         DirectedGraph graph,
         IReadOnlyList<DeliveryPoint> deliveryPoints)
@@ -20,38 +24,54 @@ public sealed class CostMatrixService
             throw new ArgumentException("A lista de pontos logisticos nao pode estar vaiza.", nameof(deliveryPoints));
         }
 
-        int count = deliveryPoints.Count;
-        LogisticPoint[] points = new LogisticPoint[count];
+        LogisticPoint[] points = MapToRoadNetwork(graph, deliveryPoints);
+        int[] allIndices = Enumerable.Range(0, points.Length).ToArray();
 
-        for (int i = 0; i < count; i++)
+        return BuildMatrix(graph, points, extraOriginNodes: [], originIndices: allIndices, destinationIndices: allIndices);
+    }
+
+    /// <summary>
+    /// Caso geral: calcula só as linhas <paramref name="originIndices"/> e, nelas, só as colunas
+    /// <paramref name="destinationIndices"/>. Os índices 0..n são os de <paramref name="points"/>;
+    /// cada nó de <paramref name="extraOriginNodes"/> recebe o índice seguinte (n+1, n+2, ...).
+    /// Entradas não pedidas ficam com <see cref="CostMatrix.NotComputed"/>.
+    /// </summary>
+    public CostMatrix BuildMatrix(
+        DirectedGraph graph,
+        IReadOnlyList<LogisticPoint> points,
+        IReadOnlyList<int> extraOriginNodes,
+        IReadOnlyList<int> originIndices,
+        IReadOnlyList<int> destinationIndices)
+    {
+        if (graph.NodeCount == 0)
         {
-            DeliveryPoint deliveryPoint = deliveryPoints[i];
-            int nearestPoint = FindNearestNode(graph, deliveryPoint.Latitude, deliveryPoint.Longitude);
-            points[i] = new LogisticPoint(
-                deliveryPoint.Id,
-                deliveryPoint.Latitude,
-                deliveryPoint.Longitude,
-                deliveryPoint.Demand,
-                nearestPoint);
+            throw new ArgumentException("O grafo viario nao pode estar vazio.", nameof(graph));
         }
 
-        int totalEntries = count * count;
-        float[] travelTimes = new float[totalEntries];
-        float[] distances = new float[totalEntries];
+        int size = points.Count + extraOriginNodes.Count;
+        int RoadNodeOf(int index) =>
+            index < points.Count ? points[index].RoadNodeIndex : extraOriginNodes[index - points.Count];
+        string Describe(int index) =>
+            index < points.Count ? $"Ponto {points[index].Id}" : $"Origem de veiculo (indice {index})";
+
+        float[] travelTimes = new float[size * size];
+        float[] distances = new float[size * size];
+        Array.Fill(travelTimes, CostMatrix.NotComputed);
+        Array.Fill(distances, CostMatrix.NotComputed);
 
         // Em vez de N*N buscas A* ponto a ponto, roda 1 Dijkstra 1-para-Todos (SSSP) por
         // ponto logistico de ORIGEM — cada busca preenche de uma vez a linha 'i' inteira da
         // matriz — e distribui essas N buscas independentes entre as threads da CPU.
         InvalidOperationException? unreachableFailure = null;
 
-        Parallel.For(0, count, i =>
+        Parallel.ForEach(originIndices, i =>
         {
             var dijkstraPathfinder = new DijkstraPathfinder();
-            SingleSourcePathResult result = dijkstraPathfinder.FindAllPaths(graph, points[i].RoadNodeIndex);
+            SingleSourcePathResult result = dijkstraPathfinder.FindAllPaths(graph, RoadNodeOf(i));
 
-            for (int j = 0; j < count; j++)
+            foreach (int j in destinationIndices)
             {
-                int matrixIndex = (i * count) + j;
+                int matrixIndex = (i * size) + j;
 
                 if (i == j)
                 {
@@ -60,14 +80,14 @@ public sealed class CostMatrixService
                     continue;
                 }
 
-                int targetRoadNode = points[j].RoadNodeIndex;
+                int targetRoadNode = RoadNodeOf(j);
 
                 if (!result.IsReachable(targetRoadNode))
                 {
                     Interlocked.CompareExchange(
                         ref unreachableFailure,
                         new InvalidOperationException(
-                            $"Malha viária desconexa: Não foi possível encontrar trajeto entre o Ponto {points[i].Id} e o Ponto {points[j].Id}."
+                            $"Malha viária desconexa: Não foi possível encontrar trajeto entre o {Describe(i)} e o {Describe(j)}."
                         ),
                         null);
                     return;
@@ -83,7 +103,29 @@ public sealed class CostMatrixService
             throw unreachableFailure;
         }
 
-        return new CostMatrix(points, travelTimes, distances);
+        return new CostMatrix(points, size, travelTimes, distances);
+    }
+
+    /// <summary>
+    /// Mapeamento φ: associa cada ponto logístico ao nó viário mais próximo.
+    /// </summary>
+    private LogisticPoint[] MapToRoadNetwork(DirectedGraph graph, IReadOnlyList<DeliveryPoint> deliveryPoints)
+    {
+        LogisticPoint[] points = new LogisticPoint[deliveryPoints.Count];
+
+        for (int i = 0; i < deliveryPoints.Count; i++)
+        {
+            DeliveryPoint deliveryPoint = deliveryPoints[i];
+            int nearestPoint = FindNearestNode(graph, deliveryPoint.Latitude, deliveryPoint.Longitude);
+            points[i] = new LogisticPoint(
+                deliveryPoint.Id,
+                deliveryPoint.Latitude,
+                deliveryPoint.Longitude,
+                deliveryPoint.Demand,
+                nearestPoint);
+        }
+
+        return points;
     }
 
     private int FindNearestNode(DirectedGraph graph, double latitude, double longitude)
@@ -101,9 +143,9 @@ public sealed class CostMatrixService
                 nearestIndex = i;
             }
         }
-        
+
         return nearestIndex;
     }
-    
-    
+
+
 }

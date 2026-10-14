@@ -5,6 +5,7 @@ namespace Dvrp.Domain.Graph;
 /// proposta: o veículo pego no meio de uma aresta conclui essa aresta antes de reotimizar.
 /// Calculado por <see cref="RouteTimeline.AnchorAfterEvent"/>.
 /// </summary>
+/// <param name="VehicleIndex">Veículo da rota (mesmo <c>VehicleIndex</c> da <see cref="Optimization.VehicleRoute"/>).</param>
 /// <param name="AnchorNodeIndex">Nó viário de onde o veículo parte na reotimização (nova origem).</param>
 /// <param name="AnchorTimeSeconds">Instante em que o veículo chega ao nó âncora.</param>
 /// <param name="WaitSeconds">Âncora menos o instante do evento: tempo até o veículo ficar disponível.</param>
@@ -12,6 +13,7 @@ namespace Dvrp.Domain.Graph;
 /// <param name="RemainingClientIndices">Clientes ainda pendentes, na ordem original da rota.</param>
 /// <param name="IsFinished">true quando a rota já terminou no instante do evento.</param>
 public readonly record struct EventAnchor(
+    int VehicleIndex,
     int AnchorNodeIndex,
     double AnchorTimeSeconds,
     double WaitSeconds,
