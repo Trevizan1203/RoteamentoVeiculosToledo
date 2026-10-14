@@ -9,8 +9,10 @@ namespace Dvrp.Domain.Reoptimization;
 ///
 /// Convenção de índices da <see cref="Matrix"/>:
 ///   0 = depósito; 1..n = clientes, com os MESMOS índices do problema original (nunca remapeados);
-///   n+1, n+2, ... = um índice por nó de origem distinto de veículo ativo fora do depósito.
-/// Veículo ancorado no nó do depósito usa o índice do depósito, sem linha extra.
+///   n+1, n+2, ... = origens anexadas, uma por nó viário distinto.
+/// Resolução da origem de um veículo pelo seu nó: nó do depósito → índice do depósito; nó de um
+/// cliente PENDENTE → índice desse cliente; senão → índice anexado. Atendidos não têm linha
+/// calculada e por isso nunca são reaproveitados como origem.
 /// Só são calculadas as linhas do depósito, dos clientes pendentes e das origens, e só as colunas
 /// do depósito e dos pendentes; o resto vale <see cref="CostMatrix.NotComputed"/>.
 /// </summary>
@@ -39,7 +41,14 @@ public sealed class ReoptimizationContext
         IReadOnlyList<LogisticPoint> points,
         CostMatrixService costMatrixService)
     {
-        int depotNode = points[DepotIndex].RoadNodeIndex;
+        // Nós que já têm linha calculada: depósito e pendentes. Depósito primeiro, e entre
+        // pendentes no mesmo nó vale o de menor índice, então a resolução é determinística.
+        var indexByNode = new Dictionary<int, int> { [points[DepotIndex].RoadNodeIndex] = DepotIndex };
+        foreach (int client in snapshot.PendingClients)
+        {
+            indexByNode.TryAdd(points[client].RoadNodeIndex, client);
+        }
+
         var extraOriginNodes = new List<int>();
         var vehicleOriginIndices = new int[snapshot.ActiveVehicles.Count];
 
@@ -47,20 +56,14 @@ public sealed class ReoptimizationContext
         {
             int originNode = snapshot.ActiveVehicles[v].OriginNode;
 
-            if (originNode == depotNode)
+            if (!indexByNode.TryGetValue(originNode, out int index))
             {
-                vehicleOriginIndices[v] = DepotIndex;
-                continue;
-            }
-
-            int position = extraOriginNodes.IndexOf(originNode);
-            if (position < 0)
-            {
-                position = extraOriginNodes.Count;
+                index = points.Count + extraOriginNodes.Count;
                 extraOriginNodes.Add(originNode);
+                indexByNode.Add(originNode, index);
             }
 
-            vehicleOriginIndices[v] = points.Count + position;
+            vehicleOriginIndices[v] = index;
         }
 
         int[] destinations = [DepotIndex, .. snapshot.PendingClients];
