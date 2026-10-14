@@ -43,6 +43,17 @@ public sealed class ReoptimizationContext
             .ToArray();
     }
 
+    /// <summary>
+    /// Problema original (antes da partida): snapshot <see cref="ReoptimizationSnapshot.Initial"/>
+    /// sobre a própria matriz original, que já é a matriz desse contexto — toda a frota parte do
+    /// depósito, então não há origens anexadas nem nada a recalcular.
+    /// </summary>
+    public static ReoptimizationContext Initial(CostMatrix originalMatrix, int fleetSize, float vehicleCapacity)
+    {
+        var snapshot = ReoptimizationSnapshot.Initial(originalMatrix, fleetSize, vehicleCapacity);
+        return new ReoptimizationContext(snapshot, originalMatrix, new int[fleetSize]); // todos no índice 0 (depósito)
+    }
+
     /// <param name="penalizedGraph">Grafo com o evento já aplicado (saída do <see cref="RoadEventApplier"/>).</param>
     /// <param name="points">Depósito e clientes já associados aos nós viários (φ), ex.: <c>CostMatrix.Points</c> original.</param>
     public static ReoptimizationContext Build(

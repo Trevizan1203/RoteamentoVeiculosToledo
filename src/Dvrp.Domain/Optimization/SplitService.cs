@@ -40,7 +40,17 @@ public sealed class SplitService
             fleet[v] = new SplitVehicle(VehicleId: v, DepotIndex, vehicleCapacity);
         }
 
-        SplitResult result = Split(chromosome.Genes, matrix, fleet, extraRouteCapacity: vehicleCapacity);
+        Evaluate(chromosome, matrix, fleet, extraRouteCapacity: vehicleCapacity);
+    }
+
+    /// <summary>Avalia o giant tour do cromossomo com <see cref="Split"/> e grava o resultado nele.</summary>
+    public void Evaluate(
+        Chromosome chromosome,
+        CostMatrix matrix,
+        IReadOnlyList<SplitVehicle> vehicles,
+        float extraRouteCapacity)
+    {
+        SplitResult result = Split(chromosome.Genes, matrix, vehicles, extraRouteCapacity);
 
         chromosome.Fitness = result.Fitness;
         chromosome.TotalTravelTimeSeconds = result.TotalTravelTimeSeconds;
