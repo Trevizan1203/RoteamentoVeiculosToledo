@@ -6,7 +6,9 @@ using Dvrp.Domain.Logistics;
 /// Veículo disponível para o Split. A ordem da lista é a ordem em que os veículos recebem os
 /// segmentos do giant tour: o 1º veículo atende o 1º segmento, o 2º o seguinte, e assim por diante.
 /// </summary>
-public readonly record struct SplitVehicle(int VehicleId, float Capacity);
+/// <param name="OriginIndex">Índice na CostMatrix de onde o veículo parte (depósito ou posição atual).</param>
+/// <param name="Capacity">Capacidade disponível (Q, ou a residual em reotimização).</param>
+public readonly record struct SplitVehicle(int VehicleId, int OriginIndex, float Capacity);
 
 /// <param name="Fitness">J(S): soma dos tempos das rotas + penalidade por rota extra.</param>
 /// <param name="ExtraRouteCount">Rotas virtuais usadas além da frota (cada uma paga a penalidade).</param>
@@ -35,7 +37,7 @@ public sealed class SplitService
         var fleet = new SplitVehicle[maxVehicles];
         for (int v = 0; v < maxVehicles; v++)
         {
-            fleet[v] = new SplitVehicle(VehicleId: v, vehicleCapacity);
+            fleet[v] = new SplitVehicle(VehicleId: v, DepotIndex, vehicleCapacity);
         }
 
         SplitResult result = Split(chromosome.Genes, matrix, fleet, extraRouteCapacity: vehicleCapacity);
@@ -51,8 +53,8 @@ public sealed class SplitService
     /// Particiona o giant tour entre os veículos, NA ORDEM da lista, minimizando J(S).
     ///
     /// cost[k][i] = menor custo para atender os 'i' primeiros clientes do tour usando os 'k'
-    /// primeiros veículos; o veículo k atende um segmento contíguo (possivelmente vazio) e volta
-    /// ao depósito. A última camada recebe as rotas extras: clientes que sobram depois do último
+    /// primeiros veículos; o veículo k sai da SUA origem, atende um segmento contíguo
+    /// (possivelmente vazio) e volta ao depósito. A última camada recebe as rotas extras: clientes que sobram depois do último
     /// veículo seguem em rotas virtuais a partir do depósito, cada uma pagando a penalidade.
     ///
     /// Desempate (o mesmo do Split clássico): os inícios de segmento são varridos em ordem
@@ -84,8 +86,9 @@ public sealed class SplitService
         // 1. Uma camada por veículo, na ordem da lista.
         for (int k = 1; k <= vehicleCount; k++)
         {
+            SplitVehicle vehicle = vehicles[k - 1];
             RelaxSegments(giantTour, matrix, cost[k - 1], cost[k], start[k],
-                vehicles[k - 1].Capacity, fixedCost: 0f, allowEmpty: true);
+                vehicle.OriginIndex, vehicle.Capacity, fixedCost: 0f, allowEmpty: true);
         }
 
         // 2. Rotas extras: partem do custo final da frota e se estendem dentro da mesma camada.
@@ -97,14 +100,14 @@ public sealed class SplitService
         }
 
         RelaxSegments(giantTour, matrix, cost[extraLayer], cost[extraLayer], start[extraLayer],
-            extraRouteCapacity, fixedCost: ExtraVehiclePenalty, allowEmpty: false);
+            DepotIndex, extraRouteCapacity, fixedCost: ExtraVehiclePenalty, allowEmpty: false);
 
         return BuildResult(giantTour, matrix, vehicles, start, extraRouteCapacity);
     }
 
     /// <summary>
     /// Relaxa uma camada da DP: para cada início 'j' alcançável em <paramref name="from"/>, tenta
-    /// fechar um segmento [j .. i-1] com um veículo de capacidade <paramref name="capacity"/>.
+    /// fechar um segmento [j .. i-1] com um veículo que parte de <paramref name="origin"/>.
     /// </summary>
     private static void RelaxSegments(
         IReadOnlyList<int> tour,
@@ -112,26 +115,30 @@ public sealed class SplitService
         float[] from,
         float[] to,
         int[] start,
+        int origin,
         float capacity,
         float fixedCost,
         bool allowEmpty)
     {
         int n = tour.Count;
 
+        // Segmento vazio: o veículo não atende ninguém, mas está na rua e precisa voltar.
+        // Saindo do depósito, custa 0.
+        float emptyCost = matrix.GetTravelTime(origin, DepotIndex);
+
         for (int j = 0; j <= n; j++)
         {
             if (float.IsPositiveInfinity(from[j]))
                 continue;
 
-            // Segmento vazio: o veículo não atende ninguém (no depósito, custa 0).
-            if (allowEmpty && from[j] < to[j])
+            if (allowEmpty && from[j] + emptyCost < to[j])
             {
-                to[j] = from[j];
+                to[j] = from[j] + emptyCost;
                 start[j] = j;
             }
 
             float load = 0f;
-            float pathTime = 0f; // tempo do depósito até o cliente atual, passando pelo segmento
+            float pathTime = 0f; // tempo da origem até o cliente atual, passando pelo segmento
 
             for (int i = j + 1; i <= n; i++)
             {
@@ -143,7 +150,7 @@ public sealed class SplitService
                     break;
 
                 pathTime += i == j + 1
-                    ? matrix.GetTravelTime(DepotIndex, client)
+                    ? matrix.GetTravelTime(origin, client)
                     : matrix.GetTravelTime(tour[i - 2], client);
 
                 float candidate = from[j] + (pathTime + matrix.GetTravelTime(client, DepotIndex)) + fixedCost;
@@ -173,9 +180,9 @@ public sealed class SplitService
         float totalDtp = 0f;
         int end = tour.Count;
 
-        void AddRoute(int vehicleId, int from, int to, float capacity, bool isVirtual)
+        void AddRoute(int vehicleId, int origin, int from, int to, float capacity, bool isVirtual)
         {
-            VehicleRoute route = BuildRoute(tour, from, to, matrix, vehicleId, capacity, isVirtual);
+            VehicleRoute route = BuildRoute(tour, from, to, matrix, vehicleId, origin, capacity, isVirtual);
             routes.Add(route);
             totalTtv += route.TravelTimeSeconds;
             totalDtp += route.DistanceMeters;
@@ -186,16 +193,19 @@ public sealed class SplitService
         while (extraStart[end] != end)
         {
             extraRouteCount++;
-            AddRoute(vehicleId: -extraRouteCount, extraStart[end], end, extraRouteCapacity, isVirtual: true);
+            AddRoute(vehicleId: -extraRouteCount, DepotIndex, extraStart[end], end, extraRouteCapacity, isVirtual: true);
             end = extraStart[end];
         }
 
         for (int k = vehicles.Count; k >= 1; k--)
         {
+            SplitVehicle vehicle = vehicles[k - 1];
             int segmentStart = start[k][end];
-            if (segmentStart < end)
+
+            // Segmento vazio fora do depósito ainda é uma rota: a volta da origem ao depósito.
+            if (segmentStart < end || vehicle.OriginIndex != DepotIndex)
             {
-                AddRoute(vehicles[k - 1].VehicleId, segmentStart, end, vehicles[k - 1].Capacity, isVirtual: false);
+                AddRoute(vehicle.VehicleId, vehicle.OriginIndex, segmentStart, end, vehicle.Capacity, isVirtual: false);
             }
 
             end = segmentStart;
@@ -212,11 +222,11 @@ public sealed class SplitService
     }
 
     /// <summary>
-    /// Rota Depósito -> [tour[start..end-1]] -> Depósito com demanda, tempo e distância completos.
+    /// Rota Origem -> [tour[start..end-1]] -> Depósito com demanda, tempo e distância completos.
     /// </summary>
     private static VehicleRoute BuildRoute(
         IReadOnlyList<int> tour, int start, int end, CostMatrix matrix,
-        int vehicleId, float capacity, bool isVirtual)
+        int vehicleId, int origin, float capacity, bool isVirtual)
     {
         int[] clients = new int[end - start];
         float demand = 0f;
@@ -227,38 +237,32 @@ public sealed class SplitService
             demand += matrix.Points[tour[i]].Demand;
         }
 
-        CalculateRouteMetrics(clients, matrix, out float time, out float distance);
+        CalculateRouteMetrics(origin, clients, matrix, out float time, out float distance);
 
-        return new VehicleRoute(vehicleId, clients, time, distance, demand, capacity, isVirtual);
+        return new VehicleRoute(vehicleId, clients, time, distance, demand, capacity, isVirtual, origin);
     }
 
     /// <summary>
-    /// Calcula tempo e distância de uma rota já definida (sem depósito nas pontas de
-    /// <paramref name="clientIndices"/>), somando o ciclo Depósito(0) -> clientes -> Depósito(0).
+    /// Calcula tempo e distância de uma rota já definida, somando o percurso
+    /// Origem -> clientes -> Depósito(0). Sem clientes, é só a volta da origem ao depósito.
     /// </summary>
     private static void CalculateRouteMetrics(
-        IReadOnlyList<int> clientIndices, CostMatrix matrix,
+        int origin, IReadOnlyList<int> clientIndices, CostMatrix matrix,
         out float time, out float distance)
     {
         time = 0f;
         distance = 0f;
+        int previous = origin;
 
-        int first = clientIndices[0];
-        int last = clientIndices[^1];
-
-        time += matrix.GetTravelTime(0, first);
-        distance += matrix.GetDistance(0, first);
-
-        for (int i = 0; i < clientIndices.Count - 1; i++)
+        foreach (int client in clientIndices)
         {
-            int client = clientIndices[i];
-            int next = clientIndices[i + 1];
-            time += matrix.GetTravelTime(client, next);
-            distance += matrix.GetDistance(client, next);
+            time += matrix.GetTravelTime(previous, client);
+            distance += matrix.GetDistance(previous, client);
+            previous = client;
         }
 
-        time += matrix.GetTravelTime(last, 0);
-        distance += matrix.GetDistance(last, 0);
+        time += matrix.GetTravelTime(previous, DepotIndex);
+        distance += matrix.GetDistance(previous, DepotIndex);
     }
 
     /// <summary>
@@ -268,7 +272,7 @@ public sealed class SplitService
     /// </summary>
     public VehicleRoute RecalculateRoute(VehicleRoute route, CostMatrix matrix, float vehicleCapacity)
     {
-        CalculateRouteMetrics(route.ClientIndices, matrix, out float time, out float distance);
+        CalculateRouteMetrics(route.OriginIndex, route.ClientIndices, matrix, out float time, out float distance);
 
         return new VehicleRoute(
             vehicleIndex: route.VehicleIndex,
@@ -277,7 +281,8 @@ public sealed class SplitService
             distanceMeters: distance,
             totalDemand: route.TotalDemand,
             maxCapacity: vehicleCapacity,
-            isVirtual: route.IsVirtual
+            isVirtual: route.IsVirtual,
+            originIndex: route.OriginIndex
         );
     }
 

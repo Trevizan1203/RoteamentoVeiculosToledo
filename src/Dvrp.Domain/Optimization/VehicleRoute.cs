@@ -12,6 +12,9 @@ public sealed class VehicleRoute
     /// <summary>Rota extra além da frota disponível, saindo do depósito e paga com penalidade.</summary>
     public bool IsVirtual { get; }
 
+    /// <summary>Índice na CostMatrix de onde a rota parte (o depósito, salvo em reotimização).</summary>
+    public int OriginIndex { get; }
+
     public VehicleRoute(
         int vehicleIndex,
         IReadOnlyList<int> clientIndices,
@@ -19,7 +22,8 @@ public sealed class VehicleRoute
         float distanceMeters,
         float totalDemand,
         float maxCapacity,
-        bool isVirtual = false)
+        bool isVirtual = false,
+        int originIndex = SplitService.DepotIndex)
     {
         VehicleIndex = vehicleIndex;
         ClientIndices = clientIndices;
@@ -28,5 +32,6 @@ public sealed class VehicleRoute
         TotalDemand = totalDemand;
         IsCapacityExceeded = totalDemand > maxCapacity;
         IsVirtual = isVirtual;
+        OriginIndex = originIndex;
     }
 }

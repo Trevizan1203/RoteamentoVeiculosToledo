@@ -1,5 +1,6 @@
 using Dvrp.Domain.Graph;
 using Dvrp.Domain.Logistics;
+using Dvrp.Domain.Optimization;
 
 namespace Dvrp.Domain.Reoptimization;
 
@@ -18,7 +19,7 @@ namespace Dvrp.Domain.Reoptimization;
 /// </summary>
 public sealed class ReoptimizationContext
 {
-    public const int DepotIndex = 0;
+    public const int DepotIndex = SplitService.DepotIndex;
 
     public ReoptimizationSnapshot Snapshot { get; }
     public CostMatrix Matrix { get; }
@@ -26,11 +27,20 @@ public sealed class ReoptimizationContext
     /// <summary>Índice na <see cref="Matrix"/> da origem de cada veículo, alinhado com <c>Snapshot.ActiveVehicles</c>.</summary>
     public IReadOnlyList<int> VehicleOriginIndices { get; }
 
+    /// <summary>
+    /// Entrada do Split multi-origem: um veículo por ativo, na ordem de <c>Snapshot.ActiveVehicles</c>
+    /// (a ordem das rotas no plano em execução), com sua origem e capacidade residual.
+    /// </summary>
+    public IReadOnlyList<SplitVehicle> SplitVehicles { get; }
+
     private ReoptimizationContext(ReoptimizationSnapshot snapshot, CostMatrix matrix, IReadOnlyList<int> vehicleOriginIndices)
     {
         Snapshot = snapshot;
         Matrix = matrix;
         VehicleOriginIndices = vehicleOriginIndices;
+        SplitVehicles = snapshot.ActiveVehicles
+            .Select((vehicle, v) => new SplitVehicle(vehicle.VehicleId, vehicleOriginIndices[v], vehicle.ResidualCapacity))
+            .ToArray();
     }
 
     /// <param name="penalizedGraph">Grafo com o evento já aplicado (saída do <see cref="RoadEventApplier"/>).</param>
