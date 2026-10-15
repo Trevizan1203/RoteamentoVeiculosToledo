@@ -1,0 +1,13 @@
+# Dependências do agregar_lote.py, com versões fixas para gerar sempre as mesmas figuras.
+# Instalação: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+contourpy==1.4.0
+cycler==0.12.1
+fonttools==4.67.0
+kiwisolver==1.5.1
+matplotlib==3.10.3
+numpy==2.5.4
+packaging==26.3
+pillow==12.3.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+six==1.17.0
