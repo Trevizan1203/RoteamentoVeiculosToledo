@@ -6,6 +6,7 @@
     <Project Path="src/Dvrp.Infrastructure/Dvrp.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Dvrp.Domain.Tests/Dvrp.Domain.Tests.csproj" />
     <Project Path="tests/Dvrp.Playground/Dvrp.Playground.csproj" />
   </Folder>
 </Solution>
